@@ -35,10 +35,9 @@
 #include "mfcc_features.h"
 
 /******** Definitions ******** */
-#define SAMPLES_PER_HOP 256U // 32 ms at 8 kHz
-#define HOPS_PER_FRAME 8U    // 256 ms total frame length at 8 kHz
-#define FULL_BUFFER_SIZE                                                       \
-  (SAMPLES_PER_HOP * HOPS_PER_FRAME) // 256 ms of audio at 8 kHz
+#define SAMPLES_PER_HOP   256U  // 32 ms at 8 kHz
+#define HOPS_PER_FRAME     16U  // 32*HOPS_PER_FRAME ms total frame length at 8 kHz
+#define FULL_BUFFER_SIZE  (SAMPLES_PER_HOP * HOPS_PER_FRAME) // 256 ms of audio at 8 kHz
 
 // MFCC Parameters defined in mfcc_features.h
 
@@ -61,10 +60,14 @@ static q15_t hop[SAMPLES_PER_HOP];
 // MFCC matrix for a frame [8 hops]
 q15_t mfcc_matrix[HOPS_PER_FRAME][MFCC_COEFFS_NUM];
 
-// Average of the MFCC coefficients for the current frame.
-#define FEATURE_VECTOR_SIZE                                                    \
-  (MFCC_COEFFS_NUM) // Only mean for each coefficient
+// Delta MFCC matrix for a frame [8 hops]
+q15_t delta_mfcc_matrix[HOPS_PER_FRAME][MFCC_COEFFS_NUM];
+
+
+// Feature vector: MFCC + Delta MFCC along the total number of hops
+#define FEATURE_VECTOR_SIZE  (MFCC_COEFFS_NUM * 2 * HOPS_PER_FRAME) 
 static q15_t feature_vector[FEATURE_VECTOR_SIZE];
+static float32_t feature_vector_f32[FEATURE_VECTOR_SIZE]; 
 
 // Global variables
 /**< @brief Coefficient for noise floor update (exponential
@@ -84,6 +87,7 @@ extern UART_HandleTypeDef huart2;
 static void mic_start(void);
 static void mic_stop(void);
 static inline q15_t i2s_sample_to_q15(uint8_t *sample);
+static inline void q8_7_to_float32(float32_t *dst, const q15_t *src, uint32_t length);
 
 /**
  * @brief  Update the status LED to indicate recording state.
@@ -119,24 +123,33 @@ void serial_recorder_loop(void) {
   while (1) {
     if (g_signal_detected) {
       if (g_dma_data_ready &&
-          hop_index < 8) // Only process if DMA data is ready and we haven't
-                         // filled the entire buffer
+          hop_index < HOPS_PER_FRAME) // Only process if DMA data is ready and we haven't
+                                      // filled the entire buffer
       {
         memcpy(full_buff + (hop_index * SAMPLES_PER_HOP), hop, sizeof(hop));
         g_dma_data_ready = false; // Reset flag after processing
 
         // Calculate MFCCs of the current hop
-        // arm_mfcc_f32(&mfcc_ctx, hop, mfcc_matrix[hop_index],
-        // mfcc_complex_buff);
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
         arm_mfcc_q15(&mfcc_ctx, hop, mfcc_matrix[hop_index], mfcc_complex_buff);
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
         hop_index++;
 
-      } else if (hop_index == 8) {
-        mean_mfcc_q15(&mfcc_matrix[0][0], HOPS_PER_FRAME, MFCC_COEFFS_NUM,
-                  feature_vector);
+      } else if (hop_index == HOPS_PER_FRAME) {
 
+        // Delta computation
+        compute_delta_mfcc_q15(&mfcc_matrix[0][0], 
+                               &delta_mfcc_matrix[0][0],
+                               HOPS_PER_FRAME, MFCC_COEFFS_NUM, 2);
+
+        interleave_mfcc_delta_q15(&mfcc_matrix[0][0], 
+                                  &delta_mfcc_matrix[0][0],
+                                  HOPS_PER_FRAME, MFCC_COEFFS_NUM, 
+                                  feature_vector);
+                                  
+        // Convert feature vector to float32_t
+        q8_7_to_float32(feature_vector_f32, feature_vector, FEATURE_VECTOR_SIZE);
+          
         hop_index = 0;
         g_signal_detected = false;
 
@@ -144,12 +157,12 @@ void serial_recorder_loop(void) {
         HAL_UART_Transmit(&huart2, (uint8_t *)"MFCC_START\r\n", 10, 100U);
         HAL_Delay(1);
 
-        // Send each element as 2 bytes (int16_t)
-        uint8_t send_buff[3];
+        // Send each element as 4 bytes (float32_t)
+        uint8_t send_buff[5];
         for (int i = 0; i < FEATURE_VECTOR_SIZE; i++) {
-          memcpy(send_buff, &feature_vector[i], 2);
-          send_buff[2] = '\n';
-          HAL_UART_Transmit(&huart2, send_buff, 3, 100U);
+          memcpy(send_buff, &feature_vector_f32[i], 4);
+          send_buff[4] = '\n';
+          HAL_UART_Transmit(&huart2, send_buff, 5, 100U);
         }
 
         HAL_UART_Transmit(&huart2, (uint8_t *)"MFCC_END\r\n", 8, 100U);
@@ -291,5 +304,14 @@ static inline float32_t i2s_sample_to_float32(uint8_t *sample) {
 
 static inline q15_t i2s_sample_to_q15(uint8_t *sample) {
   return (q15_t)((sample[1] << 8) | sample[0]);
+}
+
+static inline void q8_7_to_float32(float32_t *dst, const q15_t *src, uint32_t length)
+{
+  // MFCC output of arm_mfcc_q15 is interprete as q8.7 fixed-point, so we need to divide by 128 to get the float value.
+  for (uint32_t i = 0; i < length; i++) 
+  {
+    dst[i] = (float32_t)(q31_t)src[i] / 128.0f; // Convert from Q8.7 to float
+  }
 }
 

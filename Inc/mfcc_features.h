@@ -38,4 +38,32 @@ void mean_mfcc_q15(const q15_t *mfcc_mat, uint32_t num_hops, uint32_t num_coeffs
  */
 void mean_mfcc_f32(const float32_t *mfcc_mat, uint32_t num_hops, uint32_t num_coeffs, float32_t *feature_vector);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief Compute delta MFCCs for a Q15 MFCC matrix (with edge padding).
+ * @param mfcc_mat Pointer to input MFCC matrix (num_hops x num_coeffs, row-major)
+ * @param delta_mat Pointer to output delta matrix (same shape as input)
+ * @param num_hops Number of hops (frames)
+ * @param num_coeffs Number of MFCC coefficients per hop
+ * @param win_length Window length N (typically 2)
+ */
+void compute_delta_mfcc_q15(const q15_t *mfcc_mat, q15_t *delta_mat, uint32_t num_hops, uint32_t num_coeffs, uint16_t win_length);
+
+/**
+ * @brief Interleave MFCC and Delta MFCC matrices into a single feature vector.
+ * @param mfcc_mat Pointer to input MFCC matrix (num_hops x num_coeffs, row-major)
+ * @param delta_mat Pointer to input delta matrix (same shape as input)
+ * @param num_hops Number of hops (frames)
+ * @param num_coeffs Number of MFCC coefficients per hop
+ * @param feature_vector Pointer to output vector (size: num_hops * num_coeffs * 2)
+ */
+void interleave_mfcc_delta_q15(const q15_t *mfcc_mat, const q15_t *delta_mat, uint32_t num_hops, uint32_t num_coeffs, q15_t *feature_vector);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* MFCC_FEATURES_H */
