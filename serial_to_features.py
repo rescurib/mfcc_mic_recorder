@@ -8,8 +8,9 @@ Usage:
     python serial_to_features.py [--port COM_PORT] [--output OUTPUT_FILE]
 
 Arguments:
-    --port      Serial COM port to listen to (default: COM12)
-    --output    Output numpy file name (default: features.npy)
+    --port        Serial COM port to listen to (default: COM12)
+    --output      Output numpy file name (default: features.npy)
+    --vector-size Expected feature vector size (default: 416)
 
 Example:
     python serial_to_features.py --port COM3 --output mfcc_features_data.npy
@@ -24,7 +25,6 @@ DEFAULT_COM_PORT    = 'COM12'
 DEFAULT_SAMPLE_RATE = 8000
 DEFAULT_NPY_FILE    = 'features.npy'
 
-MFCC_FEATURES_PER_FRAME = 26
 training_data = []  # List to hold all feature vectors
 
 # Windows: use "mode" to see available COM ports
@@ -32,8 +32,9 @@ training_data = []  # List to hold all feature vectors
 
 def parse_args():
     parser = argparse.ArgumentParser(description='UART to feature vector for ML training')
-    parser.add_argument('--port', type=str, default=DEFAULT_COM_PORT, help='Serial COM port (default: COM3)')
+    parser.add_argument('--port', type=str, default=DEFAULT_COM_PORT, help='Serial COM port (default: COM12)')
     parser.add_argument('--output', type=str, default=DEFAULT_NPY_FILE, help='Output numpy file name (default: features.npy)')
+    parser.add_argument('--vector-size', type=int, default=416, help='Expected feature vector size (default: 416)')
     return parser.parse_args()
 
 
@@ -80,11 +81,14 @@ def main():
 
             # Check for MFCC feature vector stop
             if b'MFCC_END' in buffer:
-                if samples and len(samples) % MFCC_FEATURES_PER_FRAME == 0:
-                    training_data.append(samples)
+                if samples and len(samples) % args.vector_size == 0:
+                    if sample_count == 0:
+                        print("Skipping first sample (button press noise)...")
+                    else:
+                        training_data.append(samples)
+                        print("MFCC sample saved: {}".format(len(training_data)))
                     samples = []
                     sample_count += 1
-                    print("MFCC sample saved: {}".format(sample_count))
                 else:
                     print("Wrong number of features received: {}".format(len(samples)))
                     samples = []
